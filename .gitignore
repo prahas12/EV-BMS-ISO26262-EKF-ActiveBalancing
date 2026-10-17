@@ -1,0 +1,14 @@
+# MATLAB / Simulink Artifacts
+*.asv
+*.slxc
+slprj/
+*.mex*
+*.log
+
+# C Compiler Artifacts
+src/*.o
+src/*.exe
+src/generated/
+
+# MATLAB Code Generation
+codegen/
