@@ -11,46 +11,51 @@ This repository contains a closed-loop Battery Management System (BMS) simulatio
 
 ## 1. System Architecture
 
+![BMS System Architecture](docs/BMS_System_Architecture.png)
+
 ```mermaid
 flowchart TD
-    subgraph PLANT ["14S Li-ion Battery Pack & Inverter Plant (Physical Domain)"]
-        ECM["14-Cell 2nd-Order Thevenin ECM (R0, R1-C1, R2-C2)"]
-        Thermal["Coupled Lumped Thermal Model (m*Cp*dT/dt = Q_gen - Q_diss)"]
-        Inverter["Inverter DC-Link Bus (C_link = 1500 uF, Precharge Resistor = 50 Ohm)"]
-        Noise["AFE Noise Injection (5 mV Voltage Noise, 250 mA Current Bias)"]
-        ECM --> Thermal
-        ECM --> Inverter
-        Inverter --> Noise
+    subgraph PLANT ["1. Physical Plant Domain (14S Battery & Power Electronics)"]
+        direction LR
+        BATT["14S Li-ion Battery String<br/>(2nd-Order ECM: R0, R1-C1, R2-C2)"]
+        THERMAL["Lumped Thermal Model<br/>(Joule Heating & Dissipation)"]
+        INVERTER["Inverter DC-Link Bus<br/>(Capacitor Precharge & Bleed)"]
+        BATT --- THERMAL
+        BATT --- INVERTER
     end
 
-    subgraph SENSORS ["Analog Front-End (AFE) Sensing"]
-        Noise --> V_meas["Cell Voltages [V] (14x1)"]
-        Noise --> I_meas["Pack Current [A]"]
-        Noise --> T_meas["Cell Temperatures [°C] (14x1)"]
-        Noise --> Vbus_meas["Inverter Bus Voltage [V]"]
+    subgraph AFE ["2. Analog Front-End (AFE) Sensing Layer"]
+        direction LR
+        AFE_SENSE["Multi-Channel AFE Telemetry<br/>• 14x Cell Voltages [V] (3.15V – 4.20V)<br/>• Pack Current [A] (Hall Sensor ±120A)<br/>• 14x Temperatures [°C] (NTC Thermistors)<br/>• Inverter Bus Voltage [V] (DC Link Sensing)"]
     end
 
-    subgraph BMS_CORE ["BMS Firmware & Estimator Core (ASIL-D)"]
-        EKF["Discrete Extended Kalman Filter (EKF)\n- Dynamic Jacobian C = [dVoc/dSoC, -1, -1]\n- Joseph-Form Covariance Update\n- SoC Steady-State RMSE < 0.3%"]
-        RLS["Recursive Least Squares (RLS)\n- Online Internal Resistance (R0) Tracking\n- State of Health (SoH) Calculation"]
-        FSM["ISO 26262 Supervisory State Machine\n- Standby -> Precharge -> Run -> Derate\n- Contactor Weld Detection (SG05)\n- Fault Tolerant Time Interval (FTTI <= 200 ms)"]
-        BAL["Active Cell Balancing Controller\n- Bidirectional DC-DC Charge Shuttling\n- Max 1.5A Shuttling (88% Efficiency)"]
+    subgraph BMS ["3. BMS Firmware & Safety Core (ISO 26262 ASIL-D)"]
+        direction TB
+        FSM["ISO 26262 Supervisory State Machine<br/>Standby • Precharge (500 ms) • Normal Run • Derating • Safe Fault<br/>Contactor Weld Detection & FTTI Diagnostic Response (≤ 200 ms)"]
         
-        V_meas & I_meas & T_meas & Vbus_meas --> FSM
-        V_meas & I_meas & T_meas --> EKF
-        V_meas & I_meas --> RLS
-        EKF --> BAL
-        FSM --> BAL
+        subgraph ESTIMATION ["Online State & Health Estimation"]
+            direction LR
+            EKF["Discrete Extended Kalman Filter (EKF)<br/>• Dynamic OCV Jacobian Linearization<br/>• Joseph-Form Covariance Stabilization<br/>• Steady-State SoC RMSE: 0.270%"]
+            RLS["Recursive Least Squares (RLS)<br/>• Online Resistance R0 Identification<br/>• Aging & State of Health Tracking"]
+        end
+
+        BAL["Active Cell Balancing Controller<br/>Bidirectional DC-DC Charge Shuttling (Max 1.5A, 88% Efficiency)"]
+
+        FSM --> ESTIMATION
+        ESTIMATION --> BAL
     end
 
-    subgraph ACTUATION ["High-Voltage Safety Actuation"]
-        FSM --> Contactors["Main Pos, Main Neg & Precharge Contactors"]
-        FSM --> Derate["CAN Dynamic Current Limits (I_dis, I_chg)"]
-        BAL --> I_bal["Bidirectional Balancing Currents"]
+    subgraph ACTUATION ["4. Safety Actuation & Vehicle Interface"]
+        direction LR
+        CONTACTORS["High-Voltage Contactors<br/>(Main Pos, Main Neg, Precharge Relay)"]
+        DERATE["CAN Dynamic Limits<br/>(Charge & Discharge Current Limits)"]
+        BAL_ACT["Balancing Actuation<br/>(Bidirectional Shuttling Currents)"]
     end
 
-    Contactors --> Inverter
-    I_bal --> ECM
+    PLANT ==>|High-Voltage Shunts & Sense Lines| AFE
+    AFE ==>|Conditioned Measurement Bus| BMS
+    BMS ==>|Actuation Signals & CAN Limits| ACTUATION
+    ACTUATION -.->|Closed-Loop Feedback| PLANT
 ```
 
 ---
@@ -72,26 +77,58 @@ flowchart TD
 ## 3. Mathematical Foundations
 
 ### 3.1 2nd-Order Thevenin State-Space Discretization
-State vector: $x = [SoC, V_1, V_2]^T$. The exact Zero-Order Hold (ZOH) discrete state equations are:
-$$x_{k+1} = A_d x_k + B_d I_{L,k} + w_k$$
 
-$$A_d = \begin{bmatrix} 1 & 0 & 0 \\ 0 & e^{-\Delta t / (R_1 C_1)} & 0 \\ 0 & 0 & e^{-\Delta t / (R_2 C_2)} \end{bmatrix}, \quad B_d = \begin{bmatrix} -\frac{\eta \Delta t}{Q_n} \\ R_1(1 - e^{-\Delta t / (R_1 C_1)}) \\ R_2(1 - e^{-\Delta t / (R_2 C_2)}) \end{bmatrix}$$
+State vector: $x = [SoC, \, V_1, \, V_2]^T$. The exact Zero-Order Hold (ZOH) discrete state equations are:
+
+$$
+x_{k+1} = A_d x_k + B_d I_{L,k} + w_k
+$$
+
+$$
+A_d = \begin{bmatrix} 1 & 0 & 0 \\ 0 & e^{-\Delta t / (R_1 C_1)} & 0 \\ 0 & 0 & e^{-\Delta t / (R_2 C_2)} \end{bmatrix}, \quad B_d = \begin{bmatrix} -\frac{\eta \Delta t}{Q_n} \\ R_1(1 - e^{-\Delta t / (R_1 C_1)}) \\ R_2(1 - e^{-\Delta t / (R_2 C_2)}) \end{bmatrix}
+$$
 
 ### 3.2 Discrete Extended Kalman Filter (EKF)
-* **Measurement Equation:** $V_t = V_{OC}(SoC) - V_1 - V_2 - I_L \cdot R_0(T)$
-* **Measurement Jacobian ($C_k$):**
-  $$C_k = \left. \frac{\partial V_t}{\partial x} \right|_{\hat{x}_{k|k-1}} = \left[ \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}}, \quad -1, \quad -1 \right]$$
-* **Kalman Gain ($K_k$):**
-  $$S_k = C_k P_{k|k-1} C_k^T + R_{meas}, \quad K_k = \frac{P_{k|k-1} C_k^T}{S_k}$$
-* **Joseph-Form Covariance Update:**
-  $$P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T$$
-  *(Guarantees symmetric positive semi-definiteness under finite-precision single/double arithmetic).*
+
+**Measurement Equation:**
+$$
+V_t = V_{OC}(SoC) - V_1 - V_2 - I_L \cdot R_0(T)
+$$
+
+**Measurement Jacobian ($C_k$):**
+$$
+C_k = \left. \frac{\partial V_t}{\partial x} \right|_{\hat{x}_{k|k-1}} = \begin{bmatrix} \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}} & -1 & -1 \end{bmatrix}
+$$
+
+**Kalman Gain ($K_k$):**
+$$
+S_k = C_k P_{k|k-1} C_k^T + R_{meas}, \quad K_k = \frac{P_{k|k-1} C_k^T}{S_k}
+$$
+
+**Joseph-Form Covariance Update:**
+$$
+P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T
+$$
+*(Guarantees symmetric positive semi-definiteness under finite-precision arithmetic).*
 
 ### 3.3 Online Recursive Least Squares (RLS) for SoH
-Tracking internal resistance $R_0$ using exponential forgetting factor $\lambda = 0.9995$:
-$$e_k = (V_{OC}(\hat{SoC}) - \hat{V}_1 - \hat{V}_2 - V_{t,k}) - I_{L,k} \hat{R}_{0,k-1}$$
-$$K_{RLS,k} = \frac{P_{k-1} I_{L,k}}{\lambda + I_{L,k}^2 P_{k-1}}, \quad \hat{R}_{0,k} = \hat{R}_{0,k-1} + K_{RLS,k} e_k$$
-$$SoH_{R0} = \max\left(0, \min\left(100, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)$$
+
+Tracking internal resistance $R_0$ online using an exponential forgetting factor $\lambda = 0.9995$:
+
+**Innovation Residual:**
+$$
+e_k = (V_{OC}(\hat{SoC}) - \hat{V}_1 - \hat{V}_2 - V_{t,k}) - I_{L,k} \hat{R}_{0,k-1}
+$$
+
+**RLS Gain & Parameter Update:**
+$$
+K_{RLS,k} = \frac{P_{k-1} I_{L,k}}{\lambda + I_{L,k}^2 P_{k-1}}, \quad \hat{R}_{0,k} = \hat{R}_{0,k-1} + K_{RLS,k} e_k
+$$
+
+**State of Health ($SoH_{R0}$):**
+$$
+SoH_{R0} = \max\left(0, \, \min\left(100, \, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)
+$$
 
 ---
 

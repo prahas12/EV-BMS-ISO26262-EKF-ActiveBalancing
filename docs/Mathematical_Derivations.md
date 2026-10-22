@@ -65,42 +65,80 @@ $$x_{k+1} = A_d x_k + B_d I_{L,k} + w_k, \quad w_k \sim \mathcal{N}(0, Q)$$
 Because $V_{OC}(SoC)$ is non-linear, the standard Kalman filter is extended by computing the first-order Taylor expansion (Jacobian) at each time step.
 
 ### Step 1: Time Update (State & Covariance Prediction)
-$$\hat{x}_{k|k-1} = A_d \hat{x}_{k-1|k-1} + B_d I_{L,k}$$
-$$P_{k|k-1} = A_d P_{k-1|k-1} A_d^T + Q$$
+
+$$
+\hat{x}_{k|k-1} = A_d \hat{x}_{k-1|k-1} + B_d I_{L,k}
+$$
+
+$$
+P_{k|k-1} = A_d P_{k-1|k-1} A_d^T + Q
+$$
 
 where $Q = \text{diag}([q_{soc}, q_{v1}, q_{v2}])$ is the process noise covariance matrix representing current integration drift and RC modeling approximations.
 
 ### Step 2: Measurement Prediction
-$$\hat{V}_{t,k} = V_{OC}(\hat{SoC}_{k|k-1}) - \hat{V}_{1,k|k-1} - \hat{V}_{2,k|k-1} - I_{L,k} R_0$$
+
+$$
+\hat{V}_{t,k} = V_{OC}(\hat{SoC}_{k|k-1}) - \hat{V}_{1,k|k-1} - \hat{V}_{2,k|k-1} - I_{L,k} R_0
+$$
 
 ### Step 3: Measurement Linearization (Jacobian Matrix $C_k$)
 The measurement matrix $C_k \in \mathbb{R}^{1 \times 3}$ is the partial derivative of terminal voltage with respect to states:
-$$C_k = \left. \frac{\partial V_t}{\partial x} \right|_{\hat{x}_{k|k-1}} = \left[ \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}}, \quad \frac{\partial V_t}{\partial V_1}, \quad \frac{\partial V_t}{\partial V_2} \right] = \left[ \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}}, \quad -1, \quad -1 \right]$$
+
+$$
+C_k = \left. \frac{\partial V_t}{\partial x} \right|_{\hat{x}_{k|k-1}} = \begin{bmatrix} \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}} & -1 & -1 \end{bmatrix}
+$$
 
 ### Step 4: Innovation and Kalman Gain
 The innovation scalar $y_k$ and innovation covariance $S_k$ are:
-$$y_k = V_{t,measured,k} - \hat{V}_{t,k}$$
-$$S_k = C_k P_{k|k-1} C_k^T + R_{meas} \quad \in \mathbb{R}$$
+
+$$
+y_k = V_{t,measured,k} - \hat{V}_{t,k}
+$$
+
+$$
+S_k = C_k P_{k|k-1} C_k^T + R_{meas} \quad \in \mathbb{R}
+$$
 
 Because $S_k$ is a scalar ($1 \times 1$), matrix inversion is reduced to scalar division:
-$$K_k = \frac{P_{k|k-1} C_k^T}{S_k} \quad \in \mathbb{R}^{3 \times 1}$$
+
+$$
+K_k = \frac{P_{k|k-1} C_k^T}{S_k} \quad \in \mathbb{R}^{3 \times 1}
+$$
 
 ### Step 5: State Correction
-$$\hat{x}_{k|k} = \hat{x}_{k|k-1} + K_k y_k$$
-$$\hat{SoC}_{k|k} = \text{clamp}(\hat{x}_{1,k|k}, 0.0, 1.0)$$
+
+$$
+\hat{x}_{k|k} = \hat{x}_{k|k-1} + K_k y_k
+$$
+
+$$
+\hat{SoC}_{k|k} = \text{clamp}(\hat{x}_{1,k|k}, 0.0, 1.0)
+$$
 
 ### Step 6: Joseph Form Covariance Update (Numerical Stability Proof)
 In finite-precision fixed-point or single-precision embedded arithmetic, the conventional update $P = (I - K C) P_{pred}$ can lose positive definiteness due to round-off subtraction errors, causing filter divergence.
 
 We employ the **Joseph Form Covariance Update**:
-$$P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T$$
+
+$$
+P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T
+$$
 
 **Mathematical Proof of Guaranteed Positive Semi-Definiteness:**
 1. Let $M = (I - K_k C_k)$.
 2. For any non-zero vector $z \in \mathbb{R}^3$:
-   $$z^T P_{k|k} z = z^T \left( M P_{pred} M^T + K_k R K_k^T \right) z = (M^T z)^T P_{pred} (M^T z) + R_{meas} (K_k^T z)^2$$
+
+   $$
+   z^T P_{k|k} z = z^T \left( M P_{pred} M^T + K_k R K_k^T \right) z = (M^T z)^T P_{pred} (M^T z) + R_{meas} (K_k^T z)^2
+   $$
+
 3. Since $P_{pred} \succ 0$ and $R_{meas} > 0$:
-   $$(M^T z)^T P_{pred} (M^T z) \ge 0 \quad \text{and} \quad R_{meas} (K_k^T z)^2 \ge 0$$
+
+   $$
+   (M^T z)^T P_{pred} (M^T z) \ge 0 \quad \text{and} \quad R_{meas} (K_k^T z)^2 \ge 0
+   $$
+
 4. Therefore, $z^T P_{k|k} z \ge 0$ unconditionally for all time steps $k$, preventing negative eigenvalues.
 
 ---
@@ -110,7 +148,10 @@ $$P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T$$
 To track battery aging online, the ohmic internal resistance $R_0$ is identified continuously.
 
 From the ECM output equation:
-$$V_{OC}(SoC) - V_1 - V_2 - V_t = I_L \cdot R_0$$
+
+$$
+V_{OC}(SoC) - V_1 - V_2 - V_t = I_L \cdot R_0
+$$
 
 Let:
 * Output measurement: $y_{k} = V_{OC}(\hat{SoC}_k) - \hat{V}_{1,k} - \hat{V}_{2,k} - V_{t,k}$
@@ -118,11 +159,22 @@ Let:
 * Unknown parameter: $\theta = R_0$
 
 Using an exponential forgetting factor $\lambda = 0.9995$ to prioritize recent aging dynamics:
-$$e_k = y_k - \phi_k \hat{\theta}_{k-1}$$
-$$K_{RLS,k} = \frac{P_{k-1} \phi_k}{\lambda + \phi_k^2 P_{k-1}}$$
-$$\hat{\theta}_k = \hat{\theta}_{k-1} + K_{RLS,k} e_k$$
-$$P_k = \frac{1}{\lambda} \left( P_{k-1} - K_{RLS,k} \phi_k P_{k-1} \right)$$
+
+$$
+e_k = y_k - \phi_k \hat{\theta}_{k-1}
+$$
+
+$$
+K_{RLS,k} = \frac{P_{k-1} \phi_k}{\lambda + \phi_k^2 P_{k-1}}, \quad \hat{\theta}_k = \hat{\theta}_{k-1} + K_{RLS,k} e_k
+$$
+
+$$
+P_k = \frac{1}{\lambda} \left( P_{k-1} - K_{RLS,k} \phi_k P_{k-1} \right)
+$$
 
 ### State of Health (SoH) Definition
 Automotive standard IEC 62660 defines battery End of Life (EOL) when internal resistance doubles ($R_{0,EOL} = 2.0 \cdot R_{0,BOL}$):
-$$SoH_{R0} = \max\left(0, \min\left(100, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)$$
+
+$$
+SoH_{R0} = \max\left(0, \min\left(100, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)
+$$
