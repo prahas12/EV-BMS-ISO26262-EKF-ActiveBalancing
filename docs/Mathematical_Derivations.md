@@ -176,5 +176,5 @@ $$
 Automotive standard IEC 62660 defines battery End of Life (EOL) when internal resistance doubles ($R_{0,EOL} = 2.0 \cdot R_{0,BOL}$):
 
 $$
-SoH_{R0} = \max\left(0, \min\left(100, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)
+SoH_{R0} = \max \left( 0, \, \min \left( 100, \, \left( 1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}} \right) \times 100 \right) \right)
 $$

@@ -125,7 +125,7 @@ $$
 **State of Health ($SoH_{R0}$):**
 
 $$
-SoH_{R0} = \max\left(0, \, \min\left(100, \, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)
+SoH_{R0} = \max \left( 0, \, \min \left( 100, \, \left( 1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}} \right) \times 100 \right) \right)
 $$
 
 ---
@@ -151,7 +151,7 @@ All test cases are automated and pass with 100% compliance:
 
 ### Benchmark Results (WLTP Class 3 Drive Cycle, 600 s)
 * **Initial True SoC:** `84.86%` | **Initial EKF Guess:** `65.00%` (20% intentional offset)
-* **EKF Convergence Time:** Immediate ($< 1\text{ s}$ into $\pm 1.5\%$ envelope)
+* **EKF Convergence Time:** Immediate (< 1 s into ±1.5% envelope)
 * **Steady-State SoC RMSE:** **`0.270%`**
 * **Peak-to-Peak Steady-State Error:** **`1.168%`**
 * **Cell SoC Spread Reduction:** **`9.00% -> 4.43%`** (**`50.8%` balance improvement**)
