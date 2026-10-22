@@ -11,51 +11,41 @@ This repository contains a closed-loop Battery Management System (BMS) simulatio
 
 ## 1. System Architecture
 
-![BMS System Architecture](docs/BMS_System_Architecture.png)
-
 ```mermaid
 flowchart TD
-    subgraph PLANT ["1. Physical Plant Domain (14S Battery & Power Electronics)"]
-        direction LR
-        BATT["14S Li-ion Battery String<br/>(2nd-Order ECM: R0, R1-C1, R2-C2)"]
-        THERMAL["Lumped Thermal Model<br/>(Joule Heating & Dissipation)"]
-        INVERTER["Inverter DC-Link Bus<br/>(Capacitor Precharge & Bleed)"]
-        BATT --- THERMAL
-        BATT --- INVERTER
+    subgraph PLANT ["1. Plant Domain (14S Battery & Power Electronics)"]
+        ECM["14-Cell 2nd-Order Thevenin ECM<br/>(Dynamic R0, R1-C1, R2-C2 Polarization)"]
+        THERMAL["Coupled Lumped Thermal Model<br/>(Joule Heating & Convective Cooling)"]
+        INVERTER["Inverter DC-Link Bus<br/>(Capacitor Precharge & Discharge Bleeder)"]
     end
 
-    subgraph AFE ["2. Analog Front-End (AFE) Sensing Layer"]
-        direction LR
-        AFE_SENSE["Multi-Channel AFE Telemetry<br/>• 14x Cell Voltages [V] (3.15V – 4.20V)<br/>• Pack Current [A] (Hall Sensor ±120A)<br/>• 14x Temperatures [°C] (NTC Thermistors)<br/>• Inverter Bus Voltage [V] (DC Link Sensing)"]
+    subgraph SENSING ["2. Analog Front-End (AFE) Sensing Layer"]
+        AFE["Multi-Channel AFE Telemetry<br/>• Cell Voltages (14S: 3.15V – 4.20V)<br/>• Pack Load Current (±120A Hall Sensor)<br/>• Cell Temperatures (14S NTC Thermistors)<br/>• Inverter DC-Link Bus Voltage"]
     end
 
-    subgraph BMS ["3. BMS Firmware & Safety Core (ISO 26262 ASIL-D)"]
-        direction TB
-        FSM["ISO 26262 Supervisory State Machine<br/>Standby • Precharge (500 ms) • Normal Run • Derating • Safe Fault<br/>Contactor Weld Detection & FTTI Diagnostic Response (≤ 200 ms)"]
+    subgraph CORE ["3. BMS Firmware & Safety Core (ISO 26262 ASIL-D)"]
+        FSM["ISO 26262 Supervisory State Machine<br/>Standby • Precharge • Normal Run • Derating • Safe Fault<br/>Contactor Weld Detection & FTTI Response (≤ 200 ms)"]
         
-        subgraph ESTIMATION ["Online State & Health Estimation"]
-            direction LR
-            EKF["Discrete Extended Kalman Filter (EKF)<br/>• Dynamic OCV Jacobian Linearization<br/>• Joseph-Form Covariance Stabilization<br/>• Steady-State SoC RMSE: 0.270%"]
-            RLS["Recursive Least Squares (RLS)<br/>• Online Resistance R0 Identification<br/>• Aging & State of Health Tracking"]
-        end
-
+        EKF["Discrete Extended Kalman Filter (EKF)<br/>Dynamic OCV Jacobian • Joseph-Form Covariance • SoC RMSE &lt; 0.3%"]
+        RLS["Recursive Least Squares (RLS)<br/>Online R0 Identification • State of Health (SoH) Tracking"]
         BAL["Active Cell Balancing Controller<br/>Bidirectional DC-DC Charge Shuttling (Max 1.5A, 88% Efficiency)"]
-
-        FSM --> ESTIMATION
-        ESTIMATION --> BAL
+        
+        FSM --> EKF
+        FSM --> RLS
+        EKF --> BAL
     end
 
     subgraph ACTUATION ["4. Safety Actuation & Vehicle Interface"]
-        direction LR
         CONTACTORS["High-Voltage Contactors<br/>(Main Pos, Main Neg, Precharge Relay)"]
         DERATE["CAN Dynamic Limits<br/>(Charge & Discharge Current Limits)"]
-        BAL_ACT["Balancing Actuation<br/>(Bidirectional Shuttling Currents)"]
+        BAL_ACT["Balancing Actuation<br/>(Bidirectional Cell Charge Transfer)"]
     end
 
-    PLANT ==>|High-Voltage Shunts & Sense Lines| AFE
-    AFE ==>|Conditioned Measurement Bus| BMS
-    BMS ==>|Actuation Signals & CAN Limits| ACTUATION
-    ACTUATION -.->|Closed-Loop Feedback| PLANT
+    PLANT -->|Physical Sensor Signals| SENSING
+    SENSING -->|Conditioned Telemetry Bus| CORE
+    CORE -->|Contactor Commands| CONTACTORS
+    CORE -->|Dynamic Current Limits| DERATE
+    CORE -->|Balancing Commands| BAL_ACT
 ```
 
 ---
@@ -91,24 +81,29 @@ $$
 ### 3.2 Discrete Extended Kalman Filter (EKF)
 
 **Measurement Equation:**
+
 $$
 V_t = V_{OC}(SoC) - V_1 - V_2 - I_L \cdot R_0(T)
 $$
 
 **Measurement Jacobian ($C_k$):**
+
 $$
 C_k = \left. \frac{\partial V_t}{\partial x} \right|_{\hat{x}_{k|k-1}} = \begin{bmatrix} \left.\frac{\partial V_{OC}}{\partial SoC}\right|_{\hat{SoC}_{k|k-1}} & -1 & -1 \end{bmatrix}
 $$
 
 **Kalman Gain ($K_k$):**
+
 $$
 S_k = C_k P_{k|k-1} C_k^T + R_{meas}, \quad K_k = \frac{P_{k|k-1} C_k^T}{S_k}
 $$
 
 **Joseph-Form Covariance Update:**
+
 $$
 P_{k|k} = (I - K_k C_k) P_{k|k-1} (I - K_k C_k)^T + K_k R_{meas} K_k^T
 $$
+
 *(Guarantees symmetric positive semi-definiteness under finite-precision arithmetic).*
 
 ### 3.3 Online Recursive Least Squares (RLS) for SoH
@@ -116,16 +111,19 @@ $$
 Tracking internal resistance $R_0$ online using an exponential forgetting factor $\lambda = 0.9995$:
 
 **Innovation Residual:**
+
 $$
 e_k = (V_{OC}(\hat{SoC}) - \hat{V}_1 - \hat{V}_2 - V_{t,k}) - I_{L,k} \hat{R}_{0,k-1}
 $$
 
 **RLS Gain & Parameter Update:**
+
 $$
 K_{RLS,k} = \frac{P_{k-1} I_{L,k}}{\lambda + I_{L,k}^2 P_{k-1}}, \quad \hat{R}_{0,k} = \hat{R}_{0,k-1} + K_{RLS,k} e_k
 $$
 
 **State of Health ($SoH_{R0}$):**
+
 $$
 SoH_{R0} = \max\left(0, \, \min\left(100, \, \left(1 - \frac{\hat{R}_0 - R_{0,BOL}}{R_{0,BOL}}\right) \times 100\%\right)\right)
 $$
